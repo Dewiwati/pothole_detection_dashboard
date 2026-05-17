@@ -1,7 +1,5 @@
 # 🚧 Pothole Detection — Interactive Dashboard
 
-[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://potholedetectiondashboard.streamlit.app/)
-
 🔗 **Live Demo**: [https://potholedetectiondashboard.streamlit.app/](https://potholedetectiondashboard.streamlit.app/)
 
 Dashboard interaktif berbasis Streamlit untuk menampilkan insight dan kesimpulan dari proyek deteksi kerusakan jalan (pothole) menggunakan YOLOv8n segmentation.
