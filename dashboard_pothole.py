@@ -555,10 +555,10 @@ elif page == "📊 Data Assessment":
         <div class='section-card' style='border-left-color:#4ade80'>
         <b style='color:#4ade80'>✅ Split Final (Setelah Augmentasi & Re-split)</b>
         <table style='width:100%; margin-top:10px; font-family: Space Mono, monospace; font-size:13px; color:#ccc'>
-          <tr><td>Train</td><td style='color:#f0a500; text-align:right'><b>648 + 30 aug</b></td><td style='color:#888; text-align:right'>80%</td></tr>
+          <tr><td>Train</td><td style='color:#f0a500; text-align:right'><b>648 gambar</b></td><td style='color:#888; text-align:right'>80%</td></tr>
           <tr><td>Validation</td><td style='color:#f0a500; text-align:right'><b>81 gambar</b></td><td style='color:#888; text-align:right'>10%</td></tr>
           <tr><td>Test</td><td style='color:#4ade80; text-align:right'><b>81 gambar</b></td><td style='color:#888; text-align:right'>10%</td></tr>
-          <tr style='border-top:1px solid #2d3a5a'><td><b>Total</b></td><td style='color:white; text-align:right'><b>840 gambar</b></td><td></td></tr>
+          <tr style='border-top:1px solid #2d3a5a'><td><b>Total</b></td><td style='color:white; text-align:right'><b>810 gambar</b></td><td></td></tr>
         </table>
         <p style='color:#4ade80; font-size:12px; margin-top:10px'>✅ Stratified split 80/10/10 — test set tersedia</p>
         </div>
@@ -577,9 +577,9 @@ elif page == "📊 Data Assessment":
     fig_compare_split.add_trace(go.Bar(
         name="Final (post-augment)",
         x=["Train", "Validation", "Test"],
-        y=[678, 81, 81],
+        y=[648, 81, 81],
         marker_color=GREEN,
-        text=[678, 81, 81], textposition="outside",
+        text=[648, 81, 81], textposition="outside",
         textfont=dict(color="white", family="Space Mono"),
     ))
     apply_dark_theme(fig_compare_split, "Perbandingan Split: Original vs Final")
@@ -895,7 +895,7 @@ elif page == "🔄 Augmentasi":
     with col3:
         # Before vs after
         labels_aug = ["Original Train", "Setelah Augmentasi"]
-        vals_aug   = [648, 678]
+        vals_aug   = [624, 648]
         fig_aug_bar = go.Figure(go.Bar(
             x=labels_aug, y=vals_aug,
             marker_color=[BLUE, GREEN],
@@ -910,7 +910,7 @@ elif page == "🔄 Augmentasi":
         # Source composition
         fig_src = go.Figure(go.Pie(
             labels=["Original", "Augmented"],
-            values=[810, 30],
+            values=[780, 30],
             marker_colors=[BLUE, GREEN],
             hole=0.5,
         ))
