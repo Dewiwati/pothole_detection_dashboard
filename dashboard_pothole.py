@@ -164,16 +164,6 @@ def load_dataset_stats():
                 area = (max(xs) - min(xs)) * (max(ys) - min(ys))
                 bbox_areas.append(area)
 
-    # Scan augmented folder — gambar augmented adalah pothole (dari sumber pothole)
-    # tidak punya label file terpisah, langsung hitung sebagai pothole dengan count = 1
-    aug_dir = os.path.join(os.path.dirname(__file__), "augmented_pothole_images")
-    if os.path.isdir(aug_dir):
-        aug_imgs = _glob.glob(f"{aug_dir}/*.jpg") + _glob.glob(f"{aug_dir}/*.png")
-        for _ in aug_imgs:
-            widths.append(640)
-            heights.append(640)
-            pothole_counts.append(1)  # augmented dari pothole → minimal 1
-
     return (
         np.array(pothole_counts),
         np.array(bbox_areas),
@@ -189,15 +179,15 @@ def count_split_images():
         if os.path.isdir(img_dir):
             imgs = _glob.glob(f"{img_dir}/*.jpg") + _glob.glob(f"{img_dir}/*.png")
             result[split] = len(imgs)
+            if split == "train":
+                aug_imgs = [f for f in imgs if os.path.basename(f).startswith("aug_")]
+                result["augmented"]  = len(aug_imgs)
+                result["train_orig"] = len(imgs) - len(aug_imgs)
         else:
             result[split] = 0
-    # Hitung augmented
-    aug_dir = os.path.join(os.path.dirname(__file__), "augmented_pothole_images")
-    if os.path.isdir(aug_dir):
-        aug_imgs = _glob.glob(f"{aug_dir}/*.jpg") + _glob.glob(f"{aug_dir}/*.png")
-        result["augmented"] = len(aug_imgs)
-    else:
-        result["augmented"] = 0
+    if "augmented" not in result:
+        result["augmented"]  = 0
+        result["train_orig"] = 0
     return result
 
 with st.spinner("Memuat data dari dataset..."):
@@ -234,12 +224,12 @@ split_data = pd.DataFrame({
     "Persen":  [round(_tr/_tot_split*100,1), round(_va/_tot_split*100,1), round(_te/_tot_split*100,1)],
 })
 
-# Data quality (from notebook — 30 missing label images existed in original download)
+# Data quality (from notebook cell 67 — 0 missing labels after cleaning)
 quality_data = {
     "Gambar Corrupt": 0,
-    "Missing Label":  30,
+    "Missing Label":  0,
     "Label Kosong":   0,
-    "Data Valid":     780,
+    "Data Valid":     _total,
 }
 
 # ─── MODEL METRICS & TRAINING HISTORY dari results.csv ───────────────────────
@@ -253,8 +243,8 @@ def load_training_results():
     csv_path = _find_results_csv()
     if csv_path is None:
         return None, {
-            "mAP@50": 0.705, "mAP@50-95": 0.425,
-            "Precision": 0.721, "Recall": 0.662,
+            "mAP@50": 0.9949, "mAP@50-95": 0.8327,
+            "Precision": 0.9946, "Recall": 0.9843,
             "best_epoch": 50, "epochs_run": 50,
         }
     df = pd.read_csv(csv_path)
@@ -316,11 +306,15 @@ original_roboflow_split = pd.DataFrame({
 })
 
 # Final split after augmentation & re-split
+# Original 720 img → 70/15/15 → 504 train / 108 valid / 108 test
+# Augmentasi ×2 hanya pada train → +1434 aug, total train 1938
+_tr_orig = split_counts.get("train_orig", 504)
+_tr_aug  = split_counts.get("augmented",  1434)
 final_split = pd.DataFrame({
-    "Split": ["Train", "Validation", "Test"],
-    "Original": [648, 81, 81],
-    "Augmented": [30, 0, 0],
-    "Total": [678, 81, 81],
+    "Split":      ["Train", "Validation", "Test"],
+    "Asli":       [_tr_orig, _va, _te],
+    "Augmented":  [_tr_aug,  0,   0],
+    "Total":      [_tr,      _va, _te],
 })
 
 # ─── PLOTLY THEME ─────────────────────────────────────────────────────────────
@@ -412,7 +406,7 @@ if page == "🏠 Overview":
     c2.metric("Gambar Pothole",    str(dataset_stats["Gambar Pothole"]),
               f"{dataset_stats['Gambar Pothole']/max(dataset_stats['Total Gambar'],1)*100:.1f}%")
     c3.metric("Augmented",         str(dataset_stats["Gambar Augmented"]),
-              "dari 30 normal → pothole")
+              "×2 per gambar train")
     c4.metric("Avg Pothole/Frame", str(dataset_stats["Rata-rata Pothole/Gambar"]),
               f"max: {dataset_stats['Max Pothole/Gambar']}")
     c5.metric("Resolusi",          "640px", "seragam")
@@ -466,8 +460,8 @@ if page == "🏠 Overview":
         ("1", "Data Gathering", "Download dari Roboflow Universe (Pothole Segmentation YOLOv8)", "🔽"),
         ("2", "Assessing Data", "Cek jumlah file, ukuran gambar, statistik awal", "🔽"),
         ("3", "Cleaning Data", "Deteksi gambar rusak, label hilang, label kosong", "🔽"),
-        ("4", "Augmentasi", "Flip, Brightness, Blur, Rotate — 30 gambar baru dihasilkan", "🔽"),
-        ("5", "Labeling Split", "Stratified split 80/10/10 (Train/Valid/Test)", "🔽"),
+        ("4", "Augmentasi", "Flip, Brightness, Blur, Rotate — ×2 per gambar train (aug_*)", "🔽"),
+        ("5", "Labeling Split", "Re-split 70/15/15 asli + augmentasi hanya pada train", "🔽"),
         ("6", "Modeling", "YOLOv8n fine-tuned — 50 epochs, batch 16, imgsz 640", "✅"),
     ]
     for step in steps:
@@ -551,16 +545,19 @@ elif page == "📊 Data Assessment":
         """, unsafe_allow_html=True)
 
     with col_final:
-        st.markdown("""
+        _pct_tr = round(_tr / max(_tot_split, 1) * 100)
+        _pct_va = round(_va / max(_tot_split, 1) * 100)
+        _pct_te = round(_te / max(_tot_split, 1) * 100)
+        st.markdown(f"""
         <div class='section-card' style='border-left-color:#4ade80'>
         <b style='color:#4ade80'>✅ Split Final (Setelah Augmentasi & Re-split)</b>
         <table style='width:100%; margin-top:10px; font-family: Space Mono, monospace; font-size:13px; color:#ccc'>
-          <tr><td>Train</td><td style='color:#f0a500; text-align:right'><b>648 gambar</b></td><td style='color:#888; text-align:right'>80%</td></tr>
-          <tr><td>Validation</td><td style='color:#f0a500; text-align:right'><b>81 gambar</b></td><td style='color:#888; text-align:right'>10%</td></tr>
-          <tr><td>Test</td><td style='color:#4ade80; text-align:right'><b>81 gambar</b></td><td style='color:#888; text-align:right'>10%</td></tr>
-          <tr style='border-top:1px solid #2d3a5a'><td><b>Total</b></td><td style='color:white; text-align:right'><b>810 gambar</b></td><td></td></tr>
+          <tr><td>Train</td><td style='color:#f0a500; text-align:right'><b>{_tr} gambar</b></td><td style='color:#888; text-align:right'>{_pct_tr}%</td></tr>
+          <tr><td>Validation</td><td style='color:#f0a500; text-align:right'><b>{_va} gambar</b></td><td style='color:#888; text-align:right'>{_pct_va}%</td></tr>
+          <tr><td>Test</td><td style='color:#4ade80; text-align:right'><b>{_te} gambar</b></td><td style='color:#888; text-align:right'>{_pct_te}%</td></tr>
+          <tr style='border-top:1px solid #2d3a5a'><td><b>Total</b></td><td style='color:white; text-align:right'><b>{_tot_split} gambar</b></td><td></td></tr>
         </table>
-        <p style='color:#4ade80; font-size:12px; margin-top:10px'>✅ Stratified split 80/10/10 — test set tersedia</p>
+        <p style='color:#4ade80; font-size:12px; margin-top:10px'>✅ Split 70/15/15 asli + aug ×2 pada train — test set tersedia</p>
         </div>
         """, unsafe_allow_html=True)
 
@@ -577,9 +574,9 @@ elif page == "📊 Data Assessment":
     fig_compare_split.add_trace(go.Bar(
         name="Final (post-augment)",
         x=["Train", "Validation", "Test"],
-        y=[648, 81, 81],
+        y=[_tr, _va, _te],
         marker_color=GREEN,
-        text=[648, 81, 81], textposition="outside",
+        text=[_tr, _va, _te], textposition="outside",
         textfont=dict(color="white", family="Space Mono"),
     ))
     apply_dark_theme(fig_compare_split, "Perbandingan Split: Original vs Final")
@@ -587,7 +584,7 @@ elif page == "📊 Data Assessment":
         barmode="group",
         yaxis_title="Jumlah Gambar",
         legend=dict(orientation="h", yanchor="bottom", y=1.02),
-        yaxis_range=[0, 780],
+        yaxis_range=[0, max(_tr, 720) * 1.15],
     )
     st.plotly_chart(fig_compare_split, use_container_width=True)
 
@@ -734,9 +731,11 @@ elif page == "🧹 Data Cleaning":
 
     with col1:
         # Bar chart kualitas
+        _qv = quality_data["Data Valid"]
         cats   = ["Gambar\nCorrupt", "Missing\nLabel", "Label\nKosong", "Data\nValid"]
-        vals   = [0, 30, 0, 780]
-        colors = [GREEN, RED, GREEN, BLUE]
+        vals   = [quality_data["Gambar Corrupt"], quality_data["Missing Label"],
+                  quality_data["Label Kosong"],   _qv]
+        colors = [GREEN if v == 0 else RED for v in vals[:3]] + [BLUE]
 
         fig_qual = go.Figure(go.Bar(
             x=cats, y=vals,
@@ -748,21 +747,26 @@ elif page == "🧹 Data Cleaning":
             textfont=dict(color="white", family="Space Mono"),
         ))
         apply_dark_theme(fig_qual, "Kualitas Data: Jumlah Masalah per Kategori")
-        fig_qual.update_layout(yaxis_title="Jumlah", showlegend=False, yaxis_range=[0, 850])
+        fig_qual.update_layout(yaxis_title="Jumlah", showlegend=False, yaxis_range=[0, _qv * 1.15])
         st.plotly_chart(fig_qual, use_container_width=True)
 
     with col2:
         # Pie: valid vs bermasalah
+        _n_masalah = quality_data["Gambar Corrupt"] + quality_data["Missing Label"] + quality_data["Label Kosong"]
+        _pie_labels = ["Data Valid"] + (["Bermasalah"] if _n_masalah > 0 else [])
+        _pie_vals   = [_qv] + ([_n_masalah] if _n_masalah > 0 else [])
+        _pie_colors = [BLUE] + ([RED] if _n_masalah > 0 else [])
         fig_qpie = go.Figure(go.Pie(
-            labels=["Data Valid", "Bermasalah (Missing Label)"],
-            values=[780, 30],
-            marker_colors=[BLUE, RED],
+            labels=_pie_labels,
+            values=_pie_vals,
+            marker_colors=_pie_colors,
             hole=0.5,
         ))
         fig_qpie.update_traces(textinfo="percent+label", textfont_size=13)
         apply_dark_theme(fig_qpie, "Proporsi Data Valid vs Bermasalah")
+        _ann_text = f"<b>{_n_masalah/_qv*100:.1f}%</b><br>masalah" if _n_masalah > 0 else "<b>100%</b><br>bersih"
         fig_qpie.add_annotation(
-            text="<b>3.7%</b><br>masalah",
+            text=_ann_text,
             x=0.5, y=0.5,
             font=dict(color="white", size=13), showarrow=False
         )
@@ -816,9 +820,8 @@ elif page == "🧹 Data Cleaning":
     <li>Tidak ada risiko distorsi aspek rasio</li>
     <li>Input ke YOLOv8 sudah siap tanpa padding</li>
     </ul>
-    <b style='color:#f87171'>⚠️ Catatan: 30 gambar tanpa file label (.txt)</b><br>
-    <span style='color:#aaa'>Solusi: hapus 30 gambar tersebut ATAU buat label kosong
-    jika gambar tersebut memang tidak mengandung pothole (kelas negatif).</span>
+    <b style='color:#4ade80'>✅ Semua gambar memiliki label — 0 missing labels</b><br>
+    <span style='color:#aaa'>Data bersih, tidak ada gambar tanpa file label (.txt).</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -883,19 +886,20 @@ elif page == "🔄 Augmentasi":
     # Output augmentation
     st.subheader("📊 Hasil Augmentasi")
 
-    _orig = split_counts.get("train", 0) + split_counts.get("valid", 0)
-    _aug  = split_counts.get("augmented", 0)
+    _n_orig_roboflow = 720  # gambar asli dari Roboflow (konfirmasi README)
+    _n_aug_train     = split_counts.get("augmented", 0)
+    _n_tr_orig       = split_counts.get("train_orig", 0)
     c1, c2, c3 = st.columns(3)
-    c1.metric("Gambar Original",  str(_orig))
-    c2.metric("Gambar Augmented", str(_aug),  "+tambahan")
-    c3.metric("Total Gabungan",   str(_orig + _aug), "siap training")
+    c1.metric("Gambar Original (Roboflow)", str(_n_orig_roboflow))
+    c2.metric("Gambar Augmented (aug_*)",   str(_n_aug_train), "+×2 per gambar train")
+    c3.metric("Total Dataset",              str(_tot_split),   "siap training")
 
     col3, col4 = st.columns(2)
 
     with col3:
-        # Before vs after
-        labels_aug = ["Original Train", "Setelah Augmentasi"]
-        vals_aug   = [624, 648]
+        # Before vs after (train only)
+        labels_aug = ["Train Asli (70%)", "Train + Augmentasi"]
+        vals_aug   = [_n_tr_orig, _tr]
         fig_aug_bar = go.Figure(go.Bar(
             x=labels_aug, y=vals_aug,
             marker_color=[BLUE, GREEN],
@@ -903,14 +907,19 @@ elif page == "🔄 Augmentasi":
             textfont=dict(color="white", family="Space Mono"),
         ))
         apply_dark_theme(fig_aug_bar, "Jumlah Gambar Train: Sebelum vs Sesudah Augmentasi")
-        fig_aug_bar.update_layout(yaxis_title="Jumlah Gambar", showlegend=False, yaxis_range=[0, 730])
+        fig_aug_bar.update_layout(
+            yaxis_title="Jumlah Gambar", showlegend=False,
+            yaxis_range=[0, max(_tr, _n_tr_orig) * 1.18],
+        )
         st.plotly_chart(fig_aug_bar, use_container_width=True)
 
     with col4:
-        # Source composition
+        # Source composition (total dataset)
+        _pie_aug = _n_aug_train if _n_aug_train > 0 else (_tot_split - _n_orig_roboflow)
+        _pie_orig = _tot_split - _pie_aug
         fig_src = go.Figure(go.Pie(
             labels=["Original", "Augmented"],
-            values=[780, 30],
+            values=[_pie_orig, _pie_aug],
             marker_colors=[BLUE, GREEN],
             hole=0.5,
         ))
@@ -918,12 +927,14 @@ elif page == "🔄 Augmentasi":
         apply_dark_theme(fig_src, "Komposisi Sumber Data (Original vs Augmented)")
         st.plotly_chart(fig_src, use_container_width=True)
 
-    st.markdown("""
+    st.markdown(f"""
     <div class='section-card'>
-    <b style='color:#4ade80'>✅ Augmentasi Berhasil Disimpan</b><br><br>
-    30 gambar hasil augmentasi tersimpan di folder <code>/content/augmented_pothole_images/</code>
-    dan dikompresi ke ZIP untuk portabilitas. Data gabungan kemudian di-stratified-split
-    kembali dengan rasio <b>80/10/10</b>.
+    <b style='color:#4ade80'>✅ Augmentasi Berhasil Diterapkan</b><br><br>
+    Dari <b>{_n_orig_roboflow} gambar original</b> Roboflow, dilakukan re-split 70/15/15 sehingga
+    diperoleh <b>{_n_tr_orig} gambar train asli</b>. Augmentasi ×2 (HorizontalFlip, BrightnessContrast,
+    GaussianBlur, Rotate) diterapkan <em>hanya pada train</em> menghasilkan
+    <b>{_n_aug_train} gambar augmented</b> (prefiks <code>aug_</code>).
+    Total train menjadi <b>{_tr} gambar</b>, keseluruhan dataset <b>{_tot_split} gambar</b>.
     </div>
     """, unsafe_allow_html=True)
 
@@ -1094,7 +1105,7 @@ elif page == "🤖 Evaluasi Model":
         ))
         apply_dark_theme(fig_hbar, "Perbandingan Metrik Evaluasi")
         fig_hbar.update_layout(
-            xaxis=dict(title="Nilai", range=[0, 0.85]),
+            xaxis=dict(title="Nilai", range=[0, 1.1]),
             yaxis_title="Metrik",
             showlegend=False,
             height=260,
@@ -1181,11 +1192,11 @@ elif page == "🤖 Evaluasi Model":
     with col4:
         st.markdown("&nbsp;", unsafe_allow_html=True)
         recs = [
-            ("Tambah data training",    "Dataset lebih besar → recall naik",             "🟢"),
-            ("Naikkan epoch (>50)",     "Konvergensi lebih baik → semua metrik naik",    "🟢"),
-            ("Class weighting",         "Atasi bias label 96:4",                         "🟡"),
-            ("Model lebih besar (YOLOv8s/m)", "Trade-off speed vs accuracy",            "🟡"),
-            ("Hapus 30 missing labels", "Bersihkan data → training lebih stabil",        "🔵"),
+            ("Tambah data training",          "Dataset lebih besar → generalisasi lebih baik", "🟢"),
+            ("Naikkan epoch (>50)",            "Konvergensi lebih baik → semua metrik naik",    "🟢"),
+            ("Model lebih besar (YOLOv8s/m)", "Trade-off speed vs accuracy",                   "🟡"),
+            ("Deploy real-time inference",     "Integrasikan ke sistem lapangan",               "🟡"),
+            ("Tambah kelas (severity level)",  "Klasifikasi tingkat keparahan pothole",         "🔵"),
         ]
         for title, desc, icon in recs:
             st.markdown(f"""
@@ -1443,7 +1454,7 @@ elif page == "💡 Insight & Kesimpulan":
         with col2:
             # Scatter: pothole count vs area
             n_scatter = 200
-            sc_count = np.random.poisson(2.53, n_scatter)
+            sc_count = np.random.poisson(dataset_stats["Rata-rata Pothole/Gambar"], n_scatter)
             sc_area  = np.random.beta(1.5, 3.5, n_scatter)
             sc_risk  = sc_count * sc_area * 10
 
@@ -1520,8 +1531,8 @@ elif page == "💡 Insight & Kesimpulan":
             points_pb2 = [
                 ("✅", "Kualitas Data Hampir Sempurna",
                  "0 corrupt, 0 label kosong, resolusi seragam 640×640", GREEN),
-                ("✅", "Split 80/10/10 Standar Industri",
-                 "Valid & Test seimbang, training cukup untuk fine-tuning", GREEN),
+                ("✅", "Split 70/15/15 Asli + Aug ×2 pada Train",
+                 "Valid & Test seimbang dari data asli, train diperbesar dengan augmentasi", GREEN),
                 ("⚠️", "Bias Label Perlu Diwaspadai",
                  "96:4 imbalance → false positive tinggi di lapangan", AMBER),
                 ("⚠️", f"Recall {_mm['Recall']*100:.1f}% — Ada {(1-_mm['Recall'])*100:.1f}% Pothole Terlewat",
@@ -1558,14 +1569,14 @@ elif page == "💡 Insight & Kesimpulan":
     summary_cols = st.columns(3)
     summaries = [
         ("📊", "Data", GREEN,
-         ["810 gambar, resolusi 640×640",
-          "96.3% mengandung pothole",
-          "Rata-rata 2.53 pothole/frame",
-          "30 missing labels perlu dihandling"]),
+         [f"{dataset_stats['Total Gambar']} gambar, resolusi 640×640",
+          f"{dataset_stats['Gambar Pothole']/max(dataset_stats['Total Gambar'],1)*100:.1f}% mengandung pothole",
+          f"Rata-rata {dataset_stats['Rata-rata Pothole/Gambar']} pothole/frame",
+          "Data bersih: 0 missing labels"]),
         ("🔄", "Proses", AMBER,
-         ["Augmentasi: Flip, Brightness, Blur, Rotate",
-          "30 gambar baru dihasilkan",
-          "Split stratified 80/10/10",
+         ["Augmentasi ×2: Flip, Brightness, Blur, Rotate",
+          f"{split_counts.get('augmented', 0)} gambar aug_ dihasilkan",
+          "Split 70/15/15 asli + aug hanya pada train",
           "YOLOv8n fine-tuned 50 epochs"]),
         ("🤖", "Model", BLUE,
          [f"mAP@50: {_mm['mAP@50']:.3f} ({'cukup baik' if _mm['mAP@50']>=0.7 else 'perlu ditingkatkan'})",
@@ -1593,14 +1604,14 @@ elif page == "💡 Insight & Kesimpulan":
 
     with tab_short:
         short_items = [
-            ("🔵", "Hapus atau beri label negatif pada 30 gambar missing label",
-             "Data bersih → training lebih stabil & recall meningkat"),
-            ("🔵", "Tambah class weighting (pos_weight) saat training",
-             "Atasi imbalance 96:4 → false negative berkurang"),
+            ("🔵", "Tambah variasi augmentasi (Mosaic, Cutout)",
+             "Memperkaya distribusi data → generalisasi lebih baik"),
             ("🔵", "Naikkan epoch ke 100+ dengan early stopping",
              "Konvergensi lebih baik tanpa overfitting"),
             ("🔵", "Evaluasi dengan threshold confidence berbeda",
              "Optimasi precision-recall tradeoff sesuai use case"),
+            ("🔵", "Tambah kelas tingkat keparahan pothole",
+             "Informasi lebih detail untuk prioritas perbaikan jalan"),
         ]
         for icon, title, desc in short_items:
             st.markdown(f"""
